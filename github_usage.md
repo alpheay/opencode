@@ -2,14 +2,15 @@
 
 This document explains how the GitHub Copilot integration works based on the implementation in this repository (`opencode`), specifically in `packages/opencode/src/plugin/copilot.ts` and `packages/opencode/src/provider/sdk/copilot/copilot-provider.ts`.
 
-This guide details the authentication flow and the specific HTTP headers required to make API requests to GitHub Copilot's models, allowing you to use it in your own custom application or harness.
+This guide details everything an agent or developer needs to build a working, custom provider for GitHub Copilot. It covers the authentication flow, the required hardcoded Client ID, and the specific HTTP headers necessary to make API requests to GitHub Copilot's models.
 
 ## 1. Authentication: GitHub OAuth Device Flow
 
 The integration uses the **OAuth Device Authorization Grant** flow to authenticate the user and obtain an access token.
 
-### Key Details
+### Key Details & The Hardcoded Client ID
 - **Client ID:** `Ov23li8tweQw6odWQebz`
+  - **Important Note:** This Client ID is **not user-specific**. It is hardcoded into the repository. To successfully reverse-engineer this flow and implement a working provider, you **must** use this exact Client ID (`Ov23li8tweQw6odWQebz`) when initiating the OAuth Device Flow.
 - **Device Code URL:** `https://github.com/login/device/code`
 - **Access Token URL:** `https://github.com/login/oauth/access_token`
 - **Scope:** `read:user`
@@ -40,10 +41,10 @@ The integration uses the **OAuth Device Authorization Grant** flow to authentica
 
 ## 2. API Requests: Endpoints and Required Headers
 
-Once authenticated, you communicate with the Copilot API. The API is generally OpenAI-compatible but requires specific headers and payload structures.
+Once authenticated, you communicate with the Copilot API. The API accepts a standard OpenAI Chat Completions payload format but requires very specific custom headers to be accepted.
 
 ### Required Headers
-When sending requests to the Copilot models, the following custom headers must be injected:
+When sending requests to the Copilot models, the following custom headers **must** be injected:
 
 - `Authorization`: `Bearer <access_token>` (The token obtained from the OAuth flow)
 - `x-initiator`: `agent` or `user` (Indicates whether an AI agent or a human user initiated the request)
@@ -56,18 +57,18 @@ When sending requests to the Copilot models, the following custom headers must b
 
 *Note: The integration explicitly strips out standard `x-api-key` and `authorization` headers to replace them with the correct GitHub `Bearer` token.*
 
-## 3. Example Implementation (TypeScript)
+## 3. Creating a Working Provider: Example Implementation
 
-Here is a conceptual example of how to implement the authentication and API request flow in a custom application using Node.js/TypeScript.
+Here is a complete, conceptual example of how to implement the authentication and API request flow in a custom application using Node.js/TypeScript. An agent can use this directly as a blueprint to build a provider.
 
 ```typescript
-const CLIENT_ID = "Ov23li8tweQw6odWQebz";
+const CLIENT_ID = "Ov23li8tweQw6odWQebz"; // Mandatory hardcoded Client ID
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const COPILOT_API_BASE = "https://api.githubcopilot.com/chat/completions"; // Approximate base URL
 
 async function authenticateCopilot() {
-  // 1. Initiate Device Flow
+  // 1. Initiate Device Flow using the hardcoded Client ID
   const deviceRes = await fetch(DEVICE_CODE_URL, {
     method: "POST",
     headers: { "Accept": "application/json", "Content-Type": "application/json" },
@@ -85,7 +86,7 @@ async function authenticateCopilot() {
       method: "POST",
       headers: { "Accept": "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({
-        client_id: CLIENT_ID,
+        client_id: CLIENT_ID, // Must be the hardcoded Client ID
         device_code: deviceData.device_code,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code"
       })
@@ -95,7 +96,7 @@ async function authenticateCopilot() {
 
     if (tokenData.access_token) {
       console.log("Authentication successful!");
-      return tokenData.access_token;
+      return tokenData.access_token; // This is used as the Bearer token
     }
 
     if (tokenData.error !== "authorization_pending") {
@@ -105,18 +106,20 @@ async function authenticateCopilot() {
   }
 }
 
-async function queryCopilot(accessToken: string, prompt: string, isAgent: boolean = false) {
+async function queryCopilot(accessToken: string, prompt: string, modelId: string = "gpt-4", isAgent: boolean = false) {
+  // Required Headers
   const headers = {
     "Authorization": `Bearer ${accessToken}`,
     "x-initiator": isAgent ? "agent" : "user",
-    "User-Agent": "my-custom-app/1.0.0",
+    "User-Agent": "my-custom-app/1.0.0", // Required format
     "Openai-Intent": "conversation-edits",
     "Content-Type": "application/json"
   };
 
+  // OpenAI Compatible Payload
   const body = {
+    model: modelId,
     messages: [{ role: "user", content: prompt }]
-    // Depending on the model, specify model ID here
   };
 
   const response = await fetch(COPILOT_API_BASE, {
@@ -141,4 +144,4 @@ async function queryCopilot(accessToken: string, prompt: string, isAgent: boolea
 ## 4. API Emulation (OpenAI Compatible)
 
 The repository implements an `OpenaiCompatibleProvider` (`packages/opencode/src/provider/sdk/copilot/copilot-provider.ts`).
-This means that once the authentication is complete and the correct headers are appended (as shown in the `queryCopilot` example above), the Copilot API largely accepts the standard OpenAI Chat Completions payload format (`{ messages: [...] }`).
+This means that once the authentication is complete and the correct custom headers (`x-initiator`, `Openai-Intent`, `User-Agent`) are appended (as shown in the `queryCopilot` example above), the Copilot API largely accepts the standard OpenAI Chat Completions payload format (`{ model: "...", messages: [...] }`).
